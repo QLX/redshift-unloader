@@ -4,6 +4,14 @@ import tempfile
 import uuid
 import gzip
 import logging
+import csv
+import psutil
+
+from io import BytesIO
+from gzip import GzipFile
+from threading import Thread
+
+from queue import Queue
 
 from redshift_unloader.credential import Credential
 from redshift_unloader.redshift import Redshift
@@ -38,6 +46,22 @@ class RedshiftUnloader:
         else:
             logger.disabled = True
 
+    def s3get(self, q, result):
+        while not q.empty():
+            work = q.get()                      #fetch new work from the Queue
+            try:
+                bytestream = BytesIO(self.__s3.download(key=work[1]))
+                got_text = GzipFile(None, 'rb', fileobj=bytestream).read().decode('utf-8')
+                result[work[0]] =list(csv.reader(got_text))
+
+                logging.info("Requested..." + work[1])
+                q.task_done()
+
+            except:
+                logging.error('Error with data pull')
+                result[work[0]] = {}
+                #signal to the queue that task has been processed
+        return True
 
     def unload(self, query: str, filename: str,
                delimiter: str = ',', add_quotes: bool = True, escape: bool = True,
@@ -90,6 +114,77 @@ class RedshiftUnloader:
 
         logger.debug("Remove temporary directory in local")
         shutil.rmtree(local_path)
+
+    def unload_to_list(self, query: str,
+                     delimiter: str = ',', add_quotes: bool = True, escape: bool = True,
+                     null_string: str = '', with_header: bool = True) -> []:
+
+        master_list = []
+        
+        print(psutil.virtual_memory())
+        logger.debug("Get columns")
+        columns = self.__redshift.get_columns(query, add_quotes) if with_header else None
+        if columns is not None:
+            master_list.append((delimiter.join(columns) + os.linesep).encode())
+
+        session_id = self.__generate_session_id()
+        logger.debug("Session id: %s", session_id)
+
+        s3_path = self.__generate_path("/tmp/redshift-unloader", session_id, '/')
+
+        logger.debug("Unload")
+        self.__redshift.unload(
+            query,
+            self.__s3.uri(s3_path),
+            gzip=True,
+            parallel=True,
+            delimiter=delimiter,
+            null_string=null_string,
+            add_quotes=add_quotes,
+            escape=escape,
+            allow_overwrite=True)
+
+        logger.debug("Fetch the list of objects")
+        s3_keys = self.__s3.list(s3_path.lstrip('/'))
+
+         #set up the queue to hold all the urls
+        q = Queue(maxsize=0)
+        # Use many threads (5 max, or one for each url)
+        num_theads = min(5, len(s3_keys))
+
+        #Populating Queue with tasks
+        results = [{} for x in s3_keys];
+        #load up the queue with the keys to fetch and the index for each job (as a tuple):
+        for i in range(len(s3_keys)):
+            #need the index and the key in each queue item.
+            q.put((i,s3_keys[i]))
+
+
+        for i in range(num_theads):
+            logging.debug('Starting thread ', i)
+            worker = Thread(target=self.s3get, args=(q,results))
+            worker.setDaemon(True)    #setting threads as "daemon" allows main program to 
+                              #exit eventually even if these dont finish 
+                              #correctly.
+            worker.start()
+
+        #print("Waiting on queue to empty")
+
+        #now we wait until the queue has been processed
+        q.join()
+        print(psutil.virtual_memory())
+        for i in range(len(s3_keys)):
+            master_list.append(results[i])
+            results[i]=[]
+
+        logging.info('All tasks completed.')
+
+        #print(master_list)
+        logger.debug("Remove all objects in S3")
+        self.__s3.delete(s3_keys)
+        print(psutil.virtual_memory())
+        return master_list
+
 
     @staticmethod
     def __generate_session_id() -> str:
