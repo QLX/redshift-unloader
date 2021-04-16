@@ -7,10 +7,6 @@ Unloads the result of a query on Amazon Redshift to local storage.
 - psycopg2 2.7.5
 - psycopg2-binary 2.7.5
 
-## Installation
-The package is available on PyPI:
-
-
 
 ### Usage
 Unloaded data is supposed to be gzipped.
