@@ -10,9 +10,7 @@ Unloads the result of a query on Amazon Redshift to local storage.
 ## Installation
 The package is available on PyPI:
 
-```bash
-pip install redshift-unloader
-```
+
 
 ### Usage
 Unloaded data is supposed to be gzipped.
