@@ -32,4 +32,11 @@ ru.unload("SELECT * FROM my_table WHERE log_time >= 'yyyyMMdd'",
           escape=True,
           null_string='',
           with_header=True)
+          
+mylist = ru.unload_to_list("SELECT * FROM my_table WHERE log_time >= 'yyyyMMdd'",
+          delimiter=',',
+          add_quotes=True,
+          escape=True,
+          null_string=''
+          )
 ```
