@@ -1,4 +1,5 @@
 import os
+import io
 import shutil
 import tempfile
 import uuid
@@ -6,7 +7,10 @@ import gzip
 import logging
 import csv
 import psutil
+import time
+#import pandas as pd
 
+#from cStringIO import StringIO
 from io import BytesIO
 from gzip import GzipFile
 from threading import Thread
@@ -52,7 +56,8 @@ class RedshiftUnloader:
             try:
                 bytestream = BytesIO(self.__s3.download(key=work[1]))
                 got_text = GzipFile(None, 'rb', fileobj=bytestream).read().decode('utf-8')
-                result[work[0]] =list(csv.reader(got_text))
+                #result[work[0]] =list(csv.reader(got_text))
+                result[work[0]] = got_text
 
                 logging.info("Requested..." + work[1])
                 q.task_done()
@@ -119,6 +124,8 @@ class RedshiftUnloader:
                      delimiter: str = ',', add_quotes: bool = True, escape: bool = True,
                      null_string: str = '', with_header: bool = True) -> []:
 
+        startTime = time.time()
+        lines = io.StringIO()
         master_list = []
         
         print(psutil.virtual_memory())
@@ -126,6 +133,9 @@ class RedshiftUnloader:
         columns = self.__redshift.get_columns(query, add_quotes) if with_header else None
         if columns is not None:
             master_list.append((delimiter.join(columns) + os.linesep).encode())
+            #lines.write((delimiter.join(columns) + os.linesep).encode())
+            print(columns)
+            lines.write(",".join(columns)+os.linesep)
 
         session_id = self.__generate_session_id()
         logger.debug("Session id: %s", session_id)
@@ -174,17 +184,24 @@ class RedshiftUnloader:
         q.join()
         print(psutil.virtual_memory())
         for i in range(len(s3_keys)):
-            master_list.append(results[i])
-            results[i]=[]
-
+            #master_list.append(results[i])
+            lines.write(results[i])
+            results[i]=''
+ 
         logging.info('All tasks completed.')
 
         #print(master_list)
         logger.debug("Remove all objects in S3")
         self.__s3.delete(s3_keys)
         print(psutil.virtual_memory())
-        return master_list
-
+        endTime = time.time()
+        print("start ",  startTime)
+        print("end   ",  endTime)
+        #return master_list
+        #csv.reader(lines..getvalue()A
+        lines.seek(0)
+        #return pd.read_csv(lines.read(), sep=",")
+        return lines.read()
 
     @staticmethod
     def __generate_session_id() -> str:
